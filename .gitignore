@@ -1,0 +1,5 @@
+# local config (DO NOT COMMIT secrets)
+config/v6plus.env
+*.log
+*.tmp
+.DS_Store
