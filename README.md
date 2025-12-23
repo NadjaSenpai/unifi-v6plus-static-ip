@@ -1,12 +1,13 @@
 # unifi-v6plus-static-ip
 
-Scripts for **UniFi OS gateways (UDM / UDR)** to run a **v6plus static IPv4 (/32)** service delivered as an **IPv4-over-IPv6 (IPIP6) tunnel** (static IPv4 + BR IPv6 + provider-assigned IID), while keeping **native IPv6** working as-is.
+Scripts for **UniFi OS gateways (UDM / UDR)** to run a **v6plus static IPv4 (/32)** service delivered as an **IPv4-over-IPv6 (IPIP6) tunnel**, while keeping **native IPv6** working as-is.
 
 This targets ISPs that provide something like:
-- Static IPv4: `x.x.x.x/32`
-- IPv6 prefix: `xxxx:....::/64`
-- BR IPv6 address: `xxxx:....::xx`
-- Provider-assigned Interface ID (IID): `....`
+
+- **Static IPv4 address**: `x.x.x.x/32`
+- **IPv6 prefix**: `xxxx:....::/64`
+- **BR (Border Relay) IPv6 address**: `xxxx:....::xx`
+- **Provider-assigned IPv6 address for the tunnel local endpoint** (i.e., the prefix plus a fixed “host part”, sometimes called an **Interface Identifier / IID**)
 
 …and whose sample configs (e.g., Yamaha RTX) include `tunnel encapsulation ipip`.
 
@@ -88,7 +89,7 @@ ip -d link show v6plus0
 
 ## Common pitfalls
 
-- Adding the provider-assigned IID IPv6 address to WAN as `/64` can break native IPv6 due to source-address selection changes.  
+- Adding the provider-assigned tunnel-local IPv6 address as `/64` can break native IPv6 due to source-address selection changes.  
   This repo adds it as **/128** on WAN.
 - Using `ip rule from 192.168.1.0/24 lookup 300` can inadvertently affect the gateway’s own management traffic and make the UI/SSH unstable.  
   This repo uses **`ip rule ... iif br0`** (ingress-interface based) to target forwarded LAN traffic only.
