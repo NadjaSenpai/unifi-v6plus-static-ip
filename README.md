@@ -178,28 +178,48 @@ UniFi OS does **not** automatically run user scripts from `/data/on_boot.d` by d
 Changes made by this script (tunnel / ip rule / iptables) will be lost after reboot unless
 you install an **on-boot runner** (community tooling) or re-apply manually.
 
-### Option A: Use an on-boot runner (recommended)
+### Option A: Install on-boot-script-2.x (recommended)
 
-To run scripts at boot, you must install a community “on-boot runner”, commonly:
+Install **on-boot-script-2.x** from `unifi-utilities/unifios-utilities`, which sets up `udm-boot`
+and executes scripts placed under `/data/on_boot.d/`.
 
-- **udm-boot / on-boot-script**
+> Security note: this uses `curl | sh`. Review the script if you prefer.
 
-Follow the latest installation instructions from the project you choose
-(search “udm-boot UniFi OS” or “on-boot-script UniFi OS”).
-
-After installation, verify the runner is active (names vary by version):
+#### One-liner install (requires outbound Internet from the gateway)
 
 ```sh
-ls -la /data/on_boot.d 2>/dev/null || echo "no /data/on_boot.d"
-ps w | grep -E 'udm-boot|on_boot|on-boot' | grep -v grep || true
+curl -fsL "https://raw.githubusercontent.com/unifi-utilities/unifios-utilities/HEAD/on-boot-script-2.x/remote_install.sh" | /bin/sh
 ```
 
-Once the runner is installed, place your boot script in `/data/on_boot.d/`:
+#### Safer (download, review, then run)
+
+The one-liner (`curl | sh`) is convenient, but it executes whatever is downloaded **immediately**.
+If you prefer to **review the script before running it**, download it first, inspect it, then execute it:
+
+```sh
+curl -fsLo /tmp/remote_install.sh "https://raw.githubusercontent.com/unifi-utilities/unifios-utilities/HEAD/on-boot-script-2.x/remote_install.sh"
+
+# review the script contents before running (recommended)
+less /tmp/remote_install.sh
+
+# run it only after you are comfortable with what it does
+sh /tmp/remote_install.sh
+```
+
+> Tip: If `less` is not available on your device, you can use:
+>
+> ```sh
+> sed -n '1,200p' /tmp/remote_install.sh
+> ```
+
+#### Install the wrapper script
+
+Once the on-boot runner is installed, place your boot script in `/data/on_boot.d/`:
 
 ```sh
 mkdir -p /data/on_boot.d
 
-# ensure the main script exists in /data (persistent)
+# ensure the main script + env exist in /data (persistent)
 ls -la /data/v6plus-static-ip-iif.sh
 ls -la /data/v6plus.env
 
@@ -258,6 +278,11 @@ ip -d link show v6plus0
 - MSS/MTU values matter. If you see stalls or slow sites, try adjusting `TUN_MTU` and `MSS`.
 
 ---
+
+## Acknowledgements
+
+Thanks to **unifi-utilities/unifios-utilities** (on-boot-script-2.x / udm-boot) maintainers and contributors.
+- https://github.com/unifi-utilities/unifios-utilities
 
 ## License
 
