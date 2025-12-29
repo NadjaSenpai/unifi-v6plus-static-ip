@@ -276,6 +276,30 @@ ip -d link show v6plus0
 
 ---
 
+## Known limitation (UniFi UI may show "Internet Down")
+
+With this setup, UniFi Network / UniFi OS may continue to display the WAN as **"Internet Down"**
+even when connectivity is actually working.
+
+Reason (high-level): UniFi’s built-in WAN health checks/telemetry may not recognize this
+custom routing/tunnel path (static IPv4 /32 over IPIP6 + policy routing), so the UI status
+can become out-of-sync with real traffic flow.
+
+Impact:
+- You may see persistent **Internet Down** in the UI.
+- UniFi notifications/alerts and some dashboards/metrics may be misleading.
+
+How to validate actual connectivity:
+```sh
+curl -4 -s https://api.ipify.org ; echo
+curl -6 -s https://api6.ipify.org ; echo
+```
+
+If you rely on UniFi’s WAN health status/alerts for monitoring, be aware that they may not
+reflect the real state under this configuration.
+
+---
+
 ## Common pitfalls
 
 - Adding the provider-assigned tunnel-local IPv6 address as `/64` can break native IPv6 due to source-address selection changes.  
