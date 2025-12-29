@@ -1,5 +1,7 @@
 # unifi-v6plus-static-ip
 
+[日本語](README.ja.md) | [English](README.md)
+
 Scripts for **UniFi OS gateways (UDM / UDR)** to run a **v6plus static IPv4 (/32)** service delivered via an **IPv4-over-IPv6 (IPIP6) tunnel**, while keeping **native IPv6** working as-is.
 
 This targets ISPs that provide something like:
