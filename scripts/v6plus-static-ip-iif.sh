@@ -1,21 +1,18 @@
 #!/bin/sh
+# =========================
 # v6plus-static-ip-iif.sh
+# =========================
 #
-# For UniFi OS gateways (UDM / UDR):
-# - Use v6plus static IPv4 (/32) delivered via IPv4-over-IPv6 (IPIP6) tunnel
-# - Keep native IPv6 working as-is
-# - Route only forwarded IPv4 traffic coming from LAN (br0) into a dedicated routing table
-#   using ingress-interface policy routing (iif-based), avoiding management breakage.
-# - Add the provider-assigned IID IPv6 address to WAN as /128 (not /64) to avoid breaking native IPv6.
+# UniFi OS gateways (UDM / UDR):
+# - v6plus static IPv4 (/32) delivered via IPv4-over-IPv6 (IPIP6) tunnel
+# - keep native IPv6 working as-is
+# - route only forwarded IPv4 traffic coming from LAN into a dedicated routing table (iif-based)
+# - add provider-assigned tunnel-local IPv6 to WAN as /128 (not /64)
 #
 # Usage:
 #   ENV_FILE=/data/v6plus.env ./v6plus-static-ip-iif.sh apply
 #   ENV_FILE=/data/v6plus.env ./v6plus-static-ip-iif.sh status
 #   ENV_FILE=/data/v6plus.env ./v6plus-static-ip-iif.sh off
-#
-# Notes:
-# - Store scripts/env under /data for better persistence.
-# - This script avoids fwmark-based routing due to possible conflicts with UniFi rules.
 
 set -eu
 
@@ -27,11 +24,11 @@ if [ -f "$ENV_FILE" ]; then
   . "$ENV_FILE"
 else
   log "ENV_FILE not found: $ENV_FILE"
-  log "Copy config/v6plus.env.example to $ENV_FILE and edit values."
   exit 1
 fi
 
 need() { eval "v=\${$1:-}"; [ -n "$v" ] || { log "Missing env: $1"; exit 1; }; }
+
 need WAN_IF
 need LAN_IF
 need LAN_CIDR
@@ -88,15 +85,19 @@ status() {
   ip -4 addr show dev "$TUN_IF" 2>/dev/null || true
   echo
 
-  log "== IPv4 policy routing =="
-  ip -4 rule show | sed -n '1,160p' || true
+  log "== IPv4 policy routing rules =="
+  ip -4 rule show | sed -n '1,200p' || true
   echo
 
   log "== IPv4 routes in table $ROUTE_TABLE =="
   ip -4 route show table "$ROUTE_TABLE" 2>/dev/null || true
   echo
 
-  log "== SNAT ($SNAT_CHAIN) =="
+  log "== Main-table IPv4 default routes =="
+  ip -4 route show default || true
+  echo
+
+  log "== NAT ($SNAT_CHAIN) (top entries) =="
   iptables -t nat -L "$SNAT_CHAIN" -n -v --line-numbers | sed -n '1,120p' || true
   echo
 
@@ -107,8 +108,7 @@ status() {
 }
 
 apply() {
-  SNAT_CHAIN="$(detect_snat_chain)"
-  log "Applying. SNAT_CHAIN=$SNAT_CHAIN"
+  log "Applying..."
 
   sysctl -w net.ipv4.ip_forward=1 >/dev/null 2>&1 || true
   sysctl -w net.ipv4.conf.all.rp_filter=2 >/dev/null 2>&1 || true
@@ -116,12 +116,12 @@ apply() {
   sysctl -w "net.ipv4.conf.${WAN_IF}.rp_filter=2" >/dev/null 2>&1 || true
   sysctl -w "net.ipv4.conf.${TUN_IF}.rp_filter=2" >/dev/null 2>&1 || true
 
-  # Add provider-assigned local IPv6 to WAN as /128 (remove accidental /64)
+  # Add provider-assigned tunnel-local IPv6 to WAN as /128 (remove accidental /64)
   ip -6 addr del "${PROVIDER_ASSIGNED_LOCAL_V6}/64"  dev "$WAN_IF" 2>/dev/null || true
   ip -6 addr del "${PROVIDER_ASSIGNED_LOCAL_V6}/128" dev "$WAN_IF" 2>/dev/null || true
   ip -6 addr add "${PROVIDER_ASSIGNED_LOCAL_V6}/128" dev "$WAN_IF"
 
-  # Recreate tunnel
+  # Recreate tunnel (IPIP6)
   ip -6 tunnel del "$TUN_IF" 2>/dev/null || true
   ip -6 tunnel add "$TUN_IF" mode ipip6 local "$PROVIDER_ASSIGNED_LOCAL_V6" remote "$BR_V6"
   ip link set "$TUN_IF" mtu "$TUN_MTU" up
@@ -129,17 +129,18 @@ apply() {
   # Assign static IPv4 (/32) to tunnel IF
   ip addr add "${STATIC_V4}/32" dev "$TUN_IF" 2>/dev/null || true
 
-  # Policy routing (iif-based)
+  # Policy routing (iif-based) for forwarded LAN traffic only
   ip -4 rule del pref "$RULE_PREF" 2>/dev/null || true
   ip -4 route replace "$LAN_CIDR" dev "$LAN_IF" table "$ROUTE_TABLE"
   ip -4 route replace default dev "$TUN_IF" table "$ROUTE_TABLE"
   ip -4 rule add pref "$RULE_PREF" iif "$LAN_IF" lookup "$ROUTE_TABLE"
 
   # SNAT: LAN -> tunnel egress as static IPv4
+  SNAT_CHAIN="$(detect_snat_chain)"
   ipt_del_once nat "$SNAT_CHAIN" -o "$TUN_IF" -s "$LAN_CIDR" -j SNAT --to-source "$STATIC_V4"
   ipt_add     nat "$SNAT_CHAIN" -o "$TUN_IF" -s "$LAN_CIDR" -j SNAT --to-source "$STATIC_V4"
 
-  # MSS clamp
+  # MSS clamp (forwarded + gateway-originated)
   ipt_del_once mangle FORWARD -o "$TUN_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss "$MSS"
   ipt_add      mangle FORWARD -o "$TUN_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss "$MSS"
   ipt_del_once mangle OUTPUT  -o "$TUN_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss "$MSS"
@@ -150,13 +151,14 @@ apply() {
 }
 
 off() {
-  SNAT_CHAIN="$(detect_snat_chain)"
-  log "Turning OFF. SNAT_CHAIN=$SNAT_CHAIN"
+  log "Turning OFF..."
 
   ip -4 rule del pref "$RULE_PREF" 2>/dev/null || true
   ip -4 route del default table "$ROUTE_TABLE" 2>/dev/null || true
   ip -4 route del "$LAN_CIDR" table "$ROUTE_TABLE" 2>/dev/null || true
 
+  # Remove SNAT/MSS
+  SNAT_CHAIN="$(detect_snat_chain)"
   ipt_del_once nat "$SNAT_CHAIN" -o "$TUN_IF" -s "$LAN_CIDR" -j SNAT --to-source "$STATIC_V4"
   ipt_del_once mangle FORWARD -o "$TUN_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss "$MSS"
   ipt_del_once mangle OUTPUT  -o "$TUN_IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --set-mss "$MSS"

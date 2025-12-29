@@ -1,98 +1,242 @@
 # unifi-v6plus-static-ip
 
-Scripts for **UniFi OS gateways (UDM / UDR)** to run a **v6plus static IPv4 (/32)** service delivered as an **IPv4-over-IPv6 (IPIP6) tunnel** (static IPv4 + BR IPv6 + provider-assigned IID), while keeping **native IPv6** working as-is.
+Scripts for **UniFi OS gateways (UDM / UDR)** to run a **v6plus static IPv4 (/32)** service delivered via an **IPv4-over-IPv6 (IPIP6) tunnel**, while keeping **native IPv6** working as-is.
 
 This targets ISPs that provide something like:
-- Static IPv4: `x.x.x.x/32`
-- IPv6 prefix: `xxxx:....::/64`
-- BR IPv6 address: `xxxx:....::xx`
-- Provider-assigned Interface ID (IID): `....`
+
+- **Static IPv4 address**: `x.x.x.x/32`
+- **IPv6 prefix**: `xxxx:....::/64`
+- **BR (Border Relay) IPv6 address**: `xxxx:....::xx`
+- **Provider-assigned IPv6 address for the tunnel local endpoint**
+  (i.e., the prefix plus a fixed “host part”, sometimes called an **Interface Identifier / IID**)
 
 …and whose sample configs (e.g., Yamaha RTX) include `tunnel encapsulation ipip`.
 
 > ⚠️ Disclaimer  
-> Use at your own risk. UniFi OS upgrades may change behaviors.  
+> Use at your own risk. UniFi OS / Network upgrades may change interface names, firewall chains, or behaviors.
+
+> 🔐 Security note  
 > Never commit ISP update URLs / credentials. Keep secrets out of Git.  
-> The addresses in `config/v6plus.env.example` are **documentation examples** — replace them with ISP-assigned values.
+> The addresses in `config/v6plus.env.example` are documentation examples — replace them with ISP-assigned values.
+
+---
+
+## What this does
+
+- Creates an **ipip6 tunnel** (IPv4-in-IPv6) toward your ISP BR.
+- Assigns your **static IPv4 /32** to the tunnel.
+- Routes **forwarded IPv4 traffic from LAN** into a dedicated routing table using **`ip rule ... iif <LAN_IF>`** (so the gateway’s own traffic is less likely to get impacted).
+- Adds the provider-assigned tunnel-local IPv6 to WAN as **/128** (not /64) to avoid messing with native IPv6 source address selection.
+- Adds SNAT for LAN -> tunnel using your static IPv4.
+- Adds TCP MSS clamp for stability.
+
+> Note: There is **no health-check / watchdog logic** in this repo (removed).
+
+---
+
+## Prerequisites (UniFi Network UI)
+
+Before running the script, configure UniFi Network so that:
+
+1) your WAN is set to **IPv4 over IPv6 (MAP-E / v6 Plus)**, and  
+2) the WAN uses **DHCPv6** (so the gateway can receive IPv6 + Prefix Delegation), and  
+3) your LAN uses **Prefix Delegation** from that WAN.
+
+### 1) Internet (WAN): IPv4 over IPv6 (MAP-E / v6 Plus) + IPv6 DHCPv6
+
+Open:
+
+- `UniFi Network` → `Settings` → `Internet`  
+  URL: `https://192.168.1.1/network/default/settings/internet`
+
+Edit the WAN you use for this service (e.g. `Internet 2` / `WAN2`) and set:
+
+**IPv4 Configuration**
+- **Connection**: `IPv4 over IPv6`
+- **Type**: `MAP-E`
+- **Service**: `v6 Plus`
+
+**IPv6 Configuration**
+- **Connection**: `DHCPv6`
+
+Apply/Save.
+
+### 2) Networks (LAN): IPv6 Interface Type = Prefix Delegation
+
+Open:
+
+- `UniFi Network` → `Settings` → `Networks`  
+  URL: `https://192.168.1.1/network/default/settings/networks`
+
+Edit your LAN network (e.g., `Default`) and set:
+
+**IPv6**
+- **Interface Type**: `Prefix Delegation`
+- **Prefix Delegation Interface**: select the WAN from step 1 (e.g., `Internet 2`)
+
+Apply/Save.
+
+---
 
 ## Repository layout
 
-~~~text
+```text
 unifi-v6plus-static-ip/
   README.md
   LICENSE
-  .gitignore
   scripts/
     v6plus-static-ip-iif.sh
     on_boot/
       99-v6plus-static-ip.sh
   config/
     v6plus.env.example
-~~~
+```
+
+---
 
 ## Quick start (manual)
 
-1) Copy the example env file to your gateway and edit values:
+### 0) SSH into your gateway
 
-~~~sh
-cp config/v6plus.env.example /data/v6plus.env
+Enable SSH in UniFi OS / Network settings, then:
+
+```sh
+ssh root@192.168.1.1
+```
+
+### 1) Put the env file on the gateway and edit values
+
+Copy the example and edit:
+
+```sh
+cp /path/to/repo/config/v6plus.env.example /data/v6plus.env
 vi /data/v6plus.env
-~~~
+```
 
-2) Copy the script and run:
+Example `v6plus.env` keys (see `config/v6plus.env.example` for the full template):
 
-~~~sh
-cp scripts/v6plus-static-ip-iif.sh /data/v6plus-static-ip-iif.sh
+- `WAN_IF` (your WAN interface name)
+- `LAN_IF` (typically `br0`)
+- `LAN_CIDR` (e.g., `192.168.1.0/24`)
+- `STATIC_V4` (your static IPv4)
+- `PROVIDER_ASSIGNED_LOCAL_V6` (tunnel local IPv6, added to WAN as /128)
+- `BR_V6` (BR IPv6)
+- `TUN_IF` (e.g., `v6plus0`)
+- `TUN_MTU`, `MSS`
+- `ROUTE_TABLE`, `RULE_PREF`
+
+Tip to find interface names:
+
+```sh
+ip link
+ip -6 addr
+```
+
+### 2) Copy the script and run
+
+```sh
+cp /path/to/repo/scripts/v6plus-static-ip-iif.sh /data/v6plus-static-ip-iif.sh
 chmod +x /data/v6plus-static-ip-iif.sh
 
 ENV_FILE=/data/v6plus.env /data/v6plus-static-ip-iif.sh apply
+```
+
+Check status:
+
+```sh
 ENV_FILE=/data/v6plus.env /data/v6plus-static-ip-iif.sh status
-~~~
+```
 
-Rollback:
+Rollback / disable:
 
-~~~sh
+```sh
 ENV_FILE=/data/v6plus.env /data/v6plus-static-ip-iif.sh off
-~~~
+```
 
-## Persistence (udm-boot / on-boot-script-2.x)
+---
 
-A common approach on UniFi OS is to use **on-boot-script-2.x** (udm-boot) so scripts placed in `/data/on_boot.d/` are executed on boot.
+## Persistence (keep settings after reboot)
 
-Copy the wrapper:
+UniFi OS does **not** automatically run user scripts from `/data/on_boot.d` by default.
+Changes made by this script (tunnel / ip rule / iptables) will be lost after reboot unless
+you install an **on-boot runner** (community tooling) or re-apply manually.
 
-~~~sh
+### Option A: Use an on-boot runner (recommended)
+
+To run scripts at boot, you must install a community “on-boot runner”, commonly:
+
+- **udm-boot / on-boot-script**
+
+Follow the latest installation instructions from the project you choose
+(search “udm-boot UniFi OS” or “on-boot-script UniFi OS”).
+
+After installation, verify the runner is active (names vary by version):
+
+```sh
+ls -la /data/on_boot.d 2>/dev/null || echo "no /data/on_boot.d"
+ps w | grep -E 'udm-boot|on_boot|on-boot' | grep -v grep || true
+```
+
+Once the runner is installed, place your boot script in `/data/on_boot.d/`:
+
+```sh
 mkdir -p /data/on_boot.d
-cp scripts/on_boot/99-v6plus-static-ip.sh /data/on_boot.d/99-v6plus-static-ip.sh
-chmod +x /data/on_boot.d/99-v6plus-static-ip.sh
-~~~
 
-The wrapper waits until WAN has a global IPv6 address and then runs:
-- `BASE=/data/v6plus-static-ip-iif.sh`
-- `ENV_FILE=/data/v6plus.env`
+# ensure the main script exists in /data
+cp /path/to/repo/scripts/v6plus-static-ip-iif.sh /data/v6plus-static-ip-iif.sh
+chmod +x /data/v6plus-static-ip-iif.sh
+
+# install the wrapper
+cp /path/to/repo/scripts/on_boot/99-v6plus-static-ip.sh /data/on_boot.d/99-v6plus-static-ip.sh
+chmod +x /data/on_boot.d/99-v6plus-static-ip.sh
+```
+
+Reboot and verify:
+
+```sh
+ip -d link show v6plus0
+ip -4 rule
+iptables -t nat -L -n -v | sed -n '1,80p'
+```
+
+### Option B: Manual re-apply after reboot
+
+If you do not install an on-boot runner, re-run after each reboot:
+
+```sh
+ENV_FILE=/data/v6plus.env /data/v6plus-static-ip-iif.sh apply
+```
+
+---
 
 ## Validation
 
-~~~sh
-# IPv4: check your egress IP is the static one
+```sh
+# IPv4: confirm your egress IP is the static one
 curl -4 -s https://api.ipify.org ; echo
 
-# IPv6: make sure native IPv6 is still alive
+# IPv6: confirm native IPv6 still works
 curl -6 -s https://api6.ipify.org ; echo
 
 # policy routing / routes
 ip -4 rule
 ip -4 route show table 300
 ip -d link show v6plus0
-~~~
+```
+
+---
 
 ## Common pitfalls
 
-- Adding the provider-assigned IID IPv6 address to WAN as `/64` can break native IPv6 due to source-address selection changes.  
+- Adding the provider-assigned tunnel-local IPv6 address as `/64` can break native IPv6 due to source-address selection changes.  
   This repo adds it as **/128** on WAN.
-- Using `ip rule from 192.168.1.0/24 lookup 300` can inadvertently affect the gateway’s own management traffic and make the UI/SSH unstable.  
-  This repo uses **`ip rule ... iif br0`** (ingress-interface based) to target forwarded LAN traffic only.
-- fwmark-based policy routing may conflict with UniFi’s internal mangle/connmark rules; this repo avoids fwmark.
+
+- Using `ip rule from 192.168.1.0/24 lookup 300` can inadvertently affect the gateway’s own traffic and make the UI/SSH unstable.  
+  This repo uses **`ip rule ... iif <LAN_IF>`** to target forwarded LAN traffic only.
+
+- MSS/MTU values matter. If you see stalls or slow sites, try adjusting `TUN_MTU` and `MSS`.
+
+---
 
 ## License
 
