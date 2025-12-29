@@ -24,13 +24,13 @@ This targets ISPs that provide something like:
 ## What this does
 
 - Creates an **ipip6 tunnel** (IPv4-in-IPv6) toward your ISP BR.
-- Assigns your **static IPv4 /32** to the tunnel.
+- Assigns your **static IPv4 /32** to the tunnel interface.
 - Routes **forwarded IPv4 traffic from LAN** into a dedicated routing table using **`ip rule ... iif <LAN_IF>`** (so the gateway’s own traffic is less likely to get impacted).
 - Adds the provider-assigned tunnel-local IPv6 to WAN as **/128** (not /64) to avoid messing with native IPv6 source address selection.
 - Adds SNAT for LAN -> tunnel using your static IPv4.
 - Adds TCP MSS clamp for stability.
 
-> Note: There is **no health-check / watchdog logic** in this repo (removed).
+> Note: There is **no health-check / watchdog logic** in this repo.
 
 ---
 
@@ -94,26 +94,40 @@ unifi-v6plus-static-ip/
 
 ---
 
-## Quick start (manual)
+## Quick start (SCP-based)
 
-### 0) SSH into your gateway
+This guide assumes you copy files from your PC to the gateway via **SCP**.
 
-Enable SSH in UniFi OS / Network settings, then:
+### 0) Enable SSH and prepare your PC
+
+- Enable SSH on the gateway (UniFi settings).
+- Make sure your PC has `ssh` and `scp` available (macOS/Linux usually do).
+
+Gateway IP in examples below: `192.168.1.1`  
+Adjust it if your gateway IP is different.
+
+### 1) Copy files to the gateway (from your PC)
+
+From your PC, in the cloned repo directory:
+
+```sh
+# copy the script
+scp scripts/v6plus-static-ip-iif.sh root@192.168.1.1:/data/v6plus-static-ip-iif.sh
+
+# copy the env template (you will edit it on the gateway)
+scp config/v6plus.env.example root@192.168.1.1:/data/v6plus.env
+```
+
+> `/data` is the persistent storage area on UniFi OS gateways.
+
+### 2) SSH into the gateway and edit the env
 
 ```sh
 ssh root@192.168.1.1
-```
-
-### 1) Put the env file on the gateway and edit values
-
-Copy the example and edit:
-
-```sh
-cp /path/to/repo/config/v6plus.env.example /data/v6plus.env
 vi /data/v6plus.env
 ```
 
-Example `v6plus.env` keys (see `config/v6plus.env.example` for the full template):
+At minimum you must set these values:
 
 - `WAN_IF` (your WAN interface name)
 - `LAN_IF` (typically `br0`)
@@ -132,22 +146,25 @@ ip link
 ip -6 addr
 ```
 
-### 2) Copy the script and run
+### 3) Make the script executable
 
 ```sh
-cp /path/to/repo/scripts/v6plus-static-ip-iif.sh /data/v6plus-static-ip-iif.sh
 chmod +x /data/v6plus-static-ip-iif.sh
+```
 
+### 4) Apply
+
+```sh
 ENV_FILE=/data/v6plus.env /data/v6plus-static-ip-iif.sh apply
 ```
 
-Check status:
+### 5) Check status
 
 ```sh
 ENV_FILE=/data/v6plus.env /data/v6plus-static-ip-iif.sh status
 ```
 
-Rollback / disable:
+### 6) Rollback / disable
 
 ```sh
 ENV_FILE=/data/v6plus.env /data/v6plus-static-ip-iif.sh off
@@ -182,14 +199,18 @@ Once the runner is installed, place your boot script in `/data/on_boot.d/`:
 ```sh
 mkdir -p /data/on_boot.d
 
-# ensure the main script exists in /data
-cp /path/to/repo/scripts/v6plus-static-ip-iif.sh /data/v6plus-static-ip-iif.sh
-chmod +x /data/v6plus-static-ip-iif.sh
+# ensure the main script exists in /data (persistent)
+ls -la /data/v6plus-static-ip-iif.sh
+ls -la /data/v6plus.env
 
 # install the wrapper
 cp /path/to/repo/scripts/on_boot/99-v6plus-static-ip.sh /data/on_boot.d/99-v6plus-static-ip.sh
 chmod +x /data/on_boot.d/99-v6plus-static-ip.sh
 ```
+
+> Note: The wrapper script expects:
+> - `/data/v6plus-static-ip-iif.sh`
+> - `/data/v6plus.env`
 
 Reboot and verify:
 
