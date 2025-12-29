@@ -21,6 +21,15 @@ This targets ISPs that provide something like:
 
 ---
 
+## Note (Japan-specific)
+
+“v6 Plus” (v6プラス) is a Japan-specific commercial service name (IPoE + IPv4-over-IPv6) commonly used on NTT East/West NGN-based Internet access.
+Outside Japan, similar IPv4-sharing solutions are more often described as CGNAT or DS-Lite, and the term “v6 Plus” is generally not used.
+
+Technically, this setup relies on MAP-E (RFC 7597) / IPv4-over-IPv6 concepts, but the UI/ISP terminology in this README assumes a Japanese ISP environment.
+
+---
+
 ## What this does
 
 - Creates an **ipip6 tunnel** (IPv4-in-IPv6) toward your ISP BR.
@@ -283,6 +292,8 @@ ip -d link show v6plus0
 
 Thanks to **unifi-utilities/unifios-utilities** (on-boot-script-2.x / udm-boot) maintainers and contributors.
 - https://github.com/unifi-utilities/unifios-utilities
+
+---
 
 ## License
 
