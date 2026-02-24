@@ -1,0 +1,16 @@
+[Unit]
+Description=v6plus static IP tunnel (IPIP6)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash -c 'sleep 15 && ENV_FILE=/data/v6plus.env /data/v6plus-static-ip-iif.sh apply'
+ExecStop=/bin/bash -c 'ENV_FILE=/data/v6plus.env /data/v6plus-static-ip-iif.sh off'
+RemainAfterExit=yes
+Restart=on-failure
+RestartSec=30
+SyslogIdentifier=v6plus-static-ip
+
+[Install]
+WantedBy=multi-user.target

@@ -10,7 +10,7 @@ This targets ISPs that provide something like:
 - **IPv6 prefix**: `xxxx:....::/64`
 - **BR (Border Relay) IPv6 address**: `xxxx:....::xx`
 - **Provider-assigned IPv6 address for the tunnel local endpoint**
-  (i.e., the prefix plus a fixed “host part”, sometimes called an **Interface Identifier / IID**)
+  (i.e., the prefix plus a fixed "host part", sometimes called an **Interface Identifier / IID**)
 
 …and whose sample configs (e.g., Yamaha RTX) include `tunnel encapsulation ipip`.
 
@@ -25,8 +25,8 @@ This targets ISPs that provide something like:
 
 ## Note (Japan-specific)
 
-“v6 Plus” (v6プラス) is a Japan-specific commercial service name (IPoE + IPv4-over-IPv6) commonly used on NTT East/West NGN-based Internet access.
-Outside Japan, similar IPv4-sharing solutions are more often described as CGNAT or DS-Lite, and the term “v6 Plus” is generally not used.
+"v6 Plus" (v6プラス) is a Japan-specific commercial service name (IPoE + IPv4-over-IPv6) commonly used on NTT East/West NGN-based Internet access.
+Outside Japan, similar IPv4-sharing solutions are more often described as CGNAT or DS-Lite, and the term "v6 Plus" is generally not used.
 
 Technically, this setup relies on MAP-E (RFC 7597) / IPv4-over-IPv6 concepts, but the UI/ISP terminology in this README assumes a Japanese ISP environment.
 
@@ -36,12 +36,11 @@ Technically, this setup relies on MAP-E (RFC 7597) / IPv4-over-IPv6 concepts, bu
 
 - Creates an **ipip6 tunnel** (IPv4-in-IPv6) toward your ISP BR.
 - Assigns your **static IPv4 /32** to the tunnel interface.
-- Routes **forwarded IPv4 traffic from LAN** into a dedicated routing table using **`ip rule ... iif <LAN_IF>`** (so the gateway’s own traffic is less likely to get impacted).
+- Routes **forwarded IPv4 traffic from LAN** into a dedicated routing table using **`ip rule ... iif <LAN_IF>`** (so the gateway's own traffic is less likely to get impacted).
+- Adds a **default route in the main table** so the gateway itself can also reach the internet via the tunnel.
 - Adds the provider-assigned tunnel-local IPv6 to WAN as **/128** (not /64) to avoid messing with native IPv6 source address selection.
 - Adds SNAT for LAN -> tunnel using your static IPv4.
 - Adds TCP MSS clamp for stability.
-
-> Note: There is **no health-check / watchdog logic** in this repo.
 
 ---
 
@@ -49,23 +48,24 @@ Technically, this setup relies on MAP-E (RFC 7597) / IPv4-over-IPv6 concepts, bu
 
 Before running the script, configure UniFi Network so that:
 
-1) your WAN is set to **IPv4 over IPv6 (MAP-E / v6 Plus)**, and  
-2) the WAN uses **DHCPv6** (so the gateway can receive IPv6 + Prefix Delegation), and  
+1) your WAN IPv4 is set to **DHCPv4**, and
+2) the WAN uses **DHCPv6** (so the gateway can receive IPv6 + Prefix Delegation), and
 3) your LAN uses **Prefix Delegation** from that WAN.
 
-### 1) Internet (WAN): IPv4 over IPv6 (MAP-E / v6 Plus) + IPv6 DHCPv6
+> **Why DHCPv4 and not MAP-E / v6 Plus?**  
+> When WAN is set to MAP-E / v6 Plus, UniFi creates its own `ip6tnl1` tunnel and adds conflicting policy routing rules (table 201) that override the custom tunnel. DHCPv4 + DHCPv6 avoids this — UniFi does not create a competing tunnel, so `v6plus0` works cleanly.
+
+### 1) Internet (WAN): DHCPv4 + IPv6 DHCPv6
 
 Open:
 
 - `UniFi Network` → `Settings` → `Internet`  
   URL: `https://192.168.1.1/network/default/settings/internet`
 
-Edit the WAN you use for this service (e.g. `Internet 2` / `WAN2`) and set:
+Edit your WAN and set:
 
 **IPv4 Configuration**
-- **Connection**: `IPv4 over IPv6`
-- **Type**: `MAP-E`
-- **Service**: `v6 Plus`
+- **Connection**: `DHCPv4`
 
 **IPv6 Configuration**
 - **Connection**: `DHCPv6`
@@ -83,7 +83,7 @@ Edit your LAN network (e.g., `Default`) and set:
 
 **IPv6**
 - **Interface Type**: `Prefix Delegation`
-- **Prefix Delegation Interface**: select the WAN from step 1 (e.g., `Internet 2`)
+- **Prefix Delegation Interface**: select the WAN from step 1
 
 Apply/Save.
 
@@ -94,13 +94,17 @@ Apply/Save.
 ```text
 unifi-v6plus-static-ip/
   README.md
+  README.ja.md
   LICENSE
   scripts/
     v6plus-static-ip-iif.sh
-    on_boot/
-      99-v6plus-static-ip.sh
+    v6plus-watch.sh
+    v6plus-diag.sh
   config/
     v6plus.env.example
+  systemd/
+    v6plus-static-ip.service
+    v6plus-watch.service
 ```
 
 ---
@@ -122,8 +126,14 @@ Adjust it if your gateway IP is different.
 From your PC, in the cloned repo directory:
 
 ```sh
-# copy the script
+# copy the main script
 scp scripts/v6plus-static-ip-iif.sh root@192.168.1.1:/data/v6plus-static-ip-iif.sh
+
+# copy the watchdog script
+scp scripts/v6plus-watch.sh root@192.168.1.1:/data/v6plus-watch.sh
+
+# copy the diagnostic script
+scp scripts/v6plus-diag.sh root@192.168.1.1:/data/v6plus-diag.sh
 
 # copy the env template (you will edit it on the gateway)
 scp config/v6plus.env.example root@192.168.1.1:/data/v6plus.env
@@ -157,10 +167,12 @@ ip link
 ip -6 addr
 ```
 
-### 3) Make the script executable
+### 3) Make scripts executable
 
 ```sh
 chmod +x /data/v6plus-static-ip-iif.sh
+chmod +x /data/v6plus-watch.sh
+chmod +x /data/v6plus-diag.sh
 ```
 
 ### 4) Apply
@@ -173,6 +185,8 @@ ENV_FILE=/data/v6plus.env /data/v6plus-static-ip-iif.sh apply
 
 ```sh
 ENV_FILE=/data/v6plus.env /data/v6plus-static-ip-iif.sh status
+# or use the diagnostic script
+/data/v6plus-diag.sh
 ```
 
 ### 6) Rollback / disable
@@ -185,86 +199,57 @@ ENV_FILE=/data/v6plus.env /data/v6plus-static-ip-iif.sh off
 
 ## Persistence (keep settings after reboot)
 
-UniFi OS does **not** automatically run user scripts from `/data/on_boot.d` by default.
-Changes made by this script (tunnel / ip rule / iptables) will be lost after reboot unless
-you install an **on-boot runner** (community tooling) or re-apply manually.
+UniFi OS resets tunnel / ip rule / iptables on reboot. Use **systemd** to persist settings.
 
-### Option A: Install on-boot-script-2.x (recommended)
+> **Note:** On UDR/UDM, systemd unit files must be placed as **real files** in `/etc/systemd/system/` — symlinks to `/data` do **not** work.
 
-Install **on-boot-script-2.x** from `unifi-utilities/unifios-utilities`, which sets up `udm-boot`
-and executes scripts placed under `/data/on_boot.d/`.
+### Install systemd services
 
-> Security note: this uses `curl | sh`. Review the script if you prefer.
-
-#### One-liner install (requires outbound Internet from the gateway)
+Copy the service files to the gateway:
 
 ```sh
-curl -fsL "https://raw.githubusercontent.com/unifi-utilities/unifios-utilities/HEAD/on-boot-script-2.x/remote_install.sh" | /bin/sh
+scp systemd/v6plus-static-ip.service root@192.168.1.1:/etc/systemd/system/
+scp systemd/v6plus-watch.service root@192.168.1.1:/etc/systemd/system/
 ```
 
-#### Safer (download, review, then run)
-
-The one-liner (`curl | sh`) is convenient, but it executes whatever is downloaded **immediately**.
-If you prefer to **review the script before running it**, download it first, inspect it, then execute it:
+Enable and start:
 
 ```sh
-curl -fsLo /tmp/remote_install.sh "https://raw.githubusercontent.com/unifi-utilities/unifios-utilities/HEAD/on-boot-script-2.x/remote_install.sh"
-
-# review the script contents before running (recommended)
-less /tmp/remote_install.sh
-
-# run it only after you are comfortable with what it does
-sh /tmp/remote_install.sh
+ssh root@192.168.1.1
+systemctl daemon-reload
+systemctl enable v6plus-static-ip.service
+systemctl enable v6plus-watch.service
+systemctl start v6plus-static-ip.service
+systemctl start v6plus-watch.service
 ```
 
-> Tip: If `less` is not available on your device, you can use:
->
-> ```sh
-> sed -n '1,200p' /tmp/remote_install.sh
-> ```
-
-#### Install the wrapper script
-
-Once the on-boot runner is installed, place your boot script in `/data/on_boot.d/`:
+Check status:
 
 ```sh
-mkdir -p /data/on_boot.d
-
-# ensure the main script + env exist in /data (persistent)
-ls -la /data/v6plus-static-ip-iif.sh
-ls -la /data/v6plus.env
-
-# install the wrapper
-cp /path/to/repo/scripts/on_boot/99-v6plus-static-ip.sh /data/on_boot.d/99-v6plus-static-ip.sh
-chmod +x /data/on_boot.d/99-v6plus-static-ip.sh
+systemctl status v6plus-static-ip.service
+systemctl status v6plus-watch.service
+journalctl -t v6plus-watch -f
 ```
 
-> Note: The wrapper script expects:
-> - `/data/v6plus-static-ip-iif.sh`
-> - `/data/v6plus.env`
+---
 
-Reboot and verify:
+## Watchdog
 
-```sh
-ip -d link show v6plus0
-ip -4 rule
-iptables -t nat -L -n -v | sed -n '1,80p'
-```
+`v6plus-watch.sh` runs as a systemd service and handles three things:
 
-### Option B: Manual re-apply after reboot
-
-If you do not install an on-boot runner, re-run after each reboot:
-
-```sh
-ENV_FILE=/data/v6plus.env /data/v6plus-static-ip-iif.sh apply
-```
+1. **SNAT monitoring**: If UniFi wipes the SNAT rule after a config change (e.g., WiFi settings), it re-runs `apply` automatically.
+2. **Routing cleanup**: Removes conflicting UniFi-generated policy routing rules (table 201 / ip6tnl1) that would override the custom tunnel.
+3. **dpinger hijack**: Redirects UniFi's WAN health check process to use `v6plus0` instead of the DS-Lite tunnel interface, so Site Manager can see the gateway as online.
 
 ---
 
 ## Validation
 
 ```sh
-# IPv4: confirm your egress IP is the static one
+# IPv4: confirm your egress IP is the static one (run from gateway)
+curl -4 -s --interface <TUN_IF> https://api.ipify.org ; echo
+
+# IPv4: confirm from LAN client
 curl -4 -s https://api.ipify.org ; echo
 
 # IPv6: confirm native IPv6 still works
@@ -278,27 +263,13 @@ ip -d link show v6plus0
 
 ---
 
-## Known limitation (UniFi UI may show "Internet Down")
+## Known limitations
 
-With this setup, UniFi Network / UniFi OS may continue to display the WAN as **"Internet Down"**
-even when connectivity is actually working.
+- **UniFi UI shows WAN IP as `192.0.0.2`** (DS-Lite CGNAT address). This is expected. Actual egress IP is your static IPv4. Verify with: `curl -4 -s --interface <TUN_IF> https://api.ipify.org`
 
-Reason (high-level): UniFi’s built-in WAN health checks/telemetry may not recognize this
-custom routing/tunnel path (static IPv4 /32 over IPIP6 + policy routing), so the UI status
-can become out-of-sync with real traffic flow.
+- **Uptime / Internet Down in UI**: The watchdog hijacks `dpinger` to use `v6plus0`, which helps Site Manager recognize the connection. However the WAN IP shown in the UI will remain `192.0.0.2`.
 
-Impact:
-- You may see persistent **Internet Down** in the UI.
-- UniFi notifications/alerts and some dashboards/metrics may be misleading.
-
-How to validate actual connectivity:
-```sh
-curl -4 -s https://api.ipify.org ; echo
-curl -6 -s https://api6.ipify.org ; echo
-```
-
-If you rely on UniFi’s WAN health status/alerts for monitoring, be aware that they may not
-reflect the real state under this configuration.
+- **No health-check / watchdog logic in the main script**: This is handled separately by `v6plus-watch.sh`.
 
 ---
 
@@ -307,17 +278,23 @@ reflect the real state under this configuration.
 - Adding the provider-assigned tunnel-local IPv6 address as `/64` can break native IPv6 due to source-address selection changes.  
   This repo adds it as **/128** on WAN.
 
-- Using `ip rule from 192.168.1.0/24 lookup 300` can inadvertently affect the gateway’s own traffic and make the UI/SSH unstable.  
+- Using `ip rule from 192.168.1.0/24 lookup 300` can inadvertently affect the gateway's own traffic and make the UI/SSH unstable.  
   This repo uses **`ip rule ... iif <LAN_IF>`** to target forwarded LAN traffic only.
 
 - MSS/MTU values matter. If you see stalls or slow sites, try adjusting `TUN_MTU` and `MSS`.
+
+- **Do not change MSS Clamping in the UniFi UI** — it can interfere with the custom iptables rules. Leave MSS management to the script via `v6plus.env`.
+
+- **Do not set WAN to MAP-E / v6 Plus** — UniFi will create a competing `ip6tnl1` tunnel and add table 201 routing rules that conflict with `v6plus0`. Use DS-Lite instead.
 
 ---
 
 ## Acknowledgements
 
-Thanks to **unifi-utilities/unifios-utilities** (on-boot-script-2.x / udm-boot) maintainers and contributors.
+Thanks to **unifi-utilities/unifios-utilities** maintainers and contributors for the on-boot-script-2.x / udm-boot tooling, which informed the early design of this project.
 - https://github.com/unifi-utilities/unifios-utilities
+
+Also thanks to the community discussion that led to the discovery that systemd unit files must be placed as real files in `/etc/systemd/system/` (not symlinks) on UDR/UDM devices — this is what made on-boot-script unnecessary.
 
 ---
 

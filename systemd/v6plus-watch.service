@@ -1,0 +1,14 @@
+[Unit]
+Description=v6plus SNAT watchdog
+After=v6plus-static-ip.service
+Requires=v6plus-static-ip.service
+
+[Service]
+Type=simple
+ExecStart=/bin/sh /data/v6plus-watch.sh
+Restart=always
+RestartSec=5
+SyslogIdentifier=v6plus-watch
+
+[Install]
+WantedBy=multi-user.target

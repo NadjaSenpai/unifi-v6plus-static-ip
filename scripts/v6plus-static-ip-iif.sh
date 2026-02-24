@@ -8,6 +8,7 @@
 # - keep native IPv6 working as-is
 # - route only forwarded IPv4 traffic coming from LAN into a dedicated routing table (iif-based)
 # - add provider-assigned tunnel-local IPv6 to WAN as /128 (not /64)
+# - add default route to main table for gateway-originated traffic
 #
 # Usage:
 #   ENV_FILE=/data/v6plus.env ./v6plus-static-ip-iif.sh apply
@@ -135,6 +136,9 @@ apply() {
   ip -4 route replace default dev "$TUN_IF" table "$ROUTE_TABLE"
   ip -4 rule add pref "$RULE_PREF" iif "$LAN_IF" lookup "$ROUTE_TABLE"
 
+  # Main table default route for gateway-originated traffic
+  ip -4 route replace default dev "$TUN_IF" src "$STATIC_V4"
+
   # SNAT: LAN -> tunnel egress as static IPv4
   SNAT_CHAIN="$(detect_snat_chain)"
   ipt_del_once nat "$SNAT_CHAIN" -o "$TUN_IF" -s "$LAN_CIDR" -j SNAT --to-source "$STATIC_V4"
@@ -156,6 +160,7 @@ off() {
   ip -4 rule del pref "$RULE_PREF" 2>/dev/null || true
   ip -4 route del default table "$ROUTE_TABLE" 2>/dev/null || true
   ip -4 route del "$LAN_CIDR" table "$ROUTE_TABLE" 2>/dev/null || true
+  ip -4 route del default dev "$TUN_IF" 2>/dev/null || true
 
   # Remove SNAT/MSS
   SNAT_CHAIN="$(detect_snat_chain)"
